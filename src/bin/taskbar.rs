@@ -50,6 +50,8 @@ const TIMER_AUTO_UPDATE: usize = 6;
 const TIMER_UPDATED: usize = 7;
 /// Frames of the hover card's fade / slide (~60 per second while it runs).
 const TIMER_CARD: usize = 20;
+/// While the mouse is off the strip with the card open: closes the card once it is off both.
+const TIMER_CARD_WATCH: usize = 21;
 const CARD_SHOW_MS: f32 = 160.0;
 const CARD_HIDE_MS: f32 = 110.0;
 /// Old and new card blending when the mouse moves to another device (like the taskbar's previews).
@@ -73,11 +75,11 @@ const FALLBACK_AFTER_TICKS: u32 = 3;
 const PBT_APMRESUMEAUTOMATIC: usize = 0x0012;
 /// Battery refresh intervals offered in the menu, in minutes.
 const INTERVALS: [(u32, &str); 5] = [
-    (1, "1 minute"),
-    (5, "5 minutes"),
-    (10, "10 minutes"),
-    (30, "30 minutes"),
-    (60, "1 hour"),
+    (1, "1 minuto"),
+    (5, "5 minutos"),
+    (10, "10 minutos"),
+    (30, "30 minutos"),
+    (60, "1 hora"),
 ];
 const ID_INTERVAL_BASE: usize = 10;
 const ID_ON_CHANGE: usize = 20;
@@ -146,6 +148,12 @@ struct App {
     /// Hover card (device, level, last 24 hours) and the levels it charts.
     card: HWND,
     card_anim: CardAnim,
+    /// "Ver detalhes": the card also shows each device's last 24 hours.
+    card_details: bool,
+    /// Settings and details buttons on the card, (x0, y0, x1, y1) in card pixels.
+    card_buttons: [(i32, i32, i32, i32); 2],
+    /// Strip the card was opened from (the card stays while the mouse is on either).
+    card_strip: HWND,
     history: batteryhub::history::History,
     tip_for: Option<usize>,
     tracking: bool,
@@ -233,6 +241,30 @@ impl Canvas {
                 if (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r {
                     self.blend(x, y, c, 255);
                 }
+            }
+        }
+    }
+
+    /// Ring of outer radius `r` and thickness `t`: `frac` (0..1) of it from the top, clockwise, in
+    /// `fg`, the rest in `track`. Edges are smoothed over one pixel.
+    fn ring(&mut self, cx: i32, cy: i32, r: i32, t: i32, frac: f32, fg: COLORREF, track: COLORREF) {
+        let (ro, ri) = (r as f32, (r - t) as f32);
+        let end = frac.clamp(0.0, 1.0) * std::f32::consts::TAU;
+        for y in cy - r - 1..=cy + r + 1 {
+            for x in cx - r - 1..=cx + r + 1 {
+                let (dx, dy) = (x as f32 + 0.5 - cx as f32, y as f32 + 0.5 - cy as f32);
+                let d = (dx * dx + dy * dy).sqrt();
+                let cover = (ro - d + 0.5).clamp(0.0, 1.0) * (d - ri + 0.5).clamp(0.0, 1.0);
+                if cover <= 0.0 {
+                    continue;
+                }
+                // Angle from 12 o'clock, clockwise.
+                let mut ang = dx.atan2(-dy);
+                if ang < 0.0 {
+                    ang += std::f32::consts::TAU;
+                }
+                let c = if ang <= end { fg } else { track };
+                self.blend(x, y, c, (cover * 255.0) as u32);
             }
         }
     }
@@ -1183,84 +1215,44 @@ impl App {
         if self.light { (rgb(249, 249, 249), rgb(214, 214, 214)) } else { (rgb(44, 44, 44), rgb(70, 70, 70)) }
     }
 
-    /// Draws the content of the card for one device (name, level, bar, connection, last 24
-    /// hours) on a transparent canvas; the rounded background is drawn per frame, so it can
-    /// glide and stretch from one device's card to the next.
-    fn render_card(&self, d: &DeviceStatus) -> (i32, i32, Vec<u32>) {
-        let s = self.scale();
+    /// Colour of a level: red at or below the warning level (not while charging), amber up to
+    /// 50 %, green above.
+    fn level_color(&self, d: &DeviceStatus) -> COLORREF {
+        let light = self.light;
+        let th = settings::threshold(SETTINGS_KEY, &d.key);
+        if d.percent >= 0 && d.percent <= th && !d.charging {
+            ui::low_color(light)
+        } else if d.percent >= 0 && d.percent <= 50 && !d.charging {
+            if light { rgb(206, 128, 0) } else { rgb(252, 185, 0) }
+        } else if light {
+            rgb(16, 124, 16)
+        } else {
+            rgb(108, 203, 95)
+        }
+    }
+
+    /// Last 24 hours of one device between x0..x1 and top..bottom: filled area under a stepped
+    /// line, a dashed line at the warning level, and the latest point.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_chart(&self, cv: &mut Canvas, d: &DeviceStatus, x0: i32, x1: i32, top: i32, bottom: i32, accent: COLORREF, s: f32) {
         let px = |v: f32| (v * s).round() as i32;
         let light = self.light;
-        let fg = if light { rgb(0, 0, 0) } else { rgb(255, 255, 255) };
-        let dim = if light { rgb(96, 96, 96) } else { rgb(170, 170, 170) };
-        let track = if light { rgb(214, 214, 214) } else { rgb(80, 80, 80) };
         let grid = if light { rgb(200, 200, 200) } else { rgb(84, 84, 84) };
-        let th = settings::threshold(SETTINGS_KEY, &d.key);
-        let low = d.percent >= 0 && d.percent <= th && !d.charging;
-        let accent = if low { ui::low_color(light) } else if light { rgb(16, 124, 16) } else { rgb(108, 203, 95) };
-
-        let icon_f = make_font(px(16.0), 400, "Segoe Fluent Icons", "Segoe MDL2 Assets", 0);
-        let name_f = make_font(px(15.0), 600, "Segoe UI Variable Text", "Segoe UI", 0);
-        let big_f = make_font(px(30.0), 600, "Segoe UI Variable Display", "Segoe UI", 0);
-        let small_f = make_font(px(12.0), 400, "Segoe UI Variable Text", "Segoe UI", 0);
-
-        // As wide as the name needs, 300 to 400 px; longer names end in "…".
-        let pad = px(16.0);
-        let room = px(400.0) - 2 * pad - px(26.0);
-        let mut name_text = d.name.clone();
-        let mut name = mask(&name_text, name_f, light);
-        let mut chars: Vec<char> = d.name.chars().collect();
-        while name.w > room && chars.len() > 4 {
-            chars.pop();
-            name_text = format!("{}…", chars.iter().collect::<String>().trim_end());
-            name = mask(&name_text, name_f, light);
-        }
-        let w = (name.w + 2 * pad + px(26.0)).clamp(px(300.0), px(400.0));
-        let chart_h = px(80.0);
-        // Drawn on a tall canvas, then cut to the content's height plus the bottom margin.
-        let tall = px(360.0);
-        let mut cv = Canvas { w, h: tall, px: vec![0; (w * tall) as usize] };
-
-        // Header: device glyph and name.
-        let mut y = pad;
-        let glyph = mask(&d.kind.glyph().to_string(), icon_f, light);
-        cv.draw(&glyph, pad, y + px(2.0), fg, 255);
-        cv.draw(&name, pad + px(26.0), y, fg, 255);
-        y += px(34.0);
-
-        // Big level (or the device's own word for it), then the bar.
-        let big_text = if d.percent >= 0 { format!("{}%", d.percent) } else if !d.level_text.is_empty() { d.level_text.clone() } else { "?".into() };
-        let big = mask(&big_text, big_f, light);
-        cv.draw(&big, pad, y, if low { accent } else { fg }, 255);
-        y += px(42.0); // same layout for every device, so cards share one height
-        cv.fill_rrect(pad, y, w - pad, y + px(6.0), px(3.0), track, 255);
-        if d.percent > 0 {
-            let fill = pad + (w - 2 * pad) * d.percent.min(100) / 100;
-            cv.fill_rrect(pad, y, fill.max(pad + px(6.0)), y + px(6.0), px(3.0), accent, 255);
-        }
-        y += px(18.0);
-
-        // Connection and state.
-        let mut line = d.via.clone();
-        if d.charging {
-            line.push_str(if d.full { " · Full" } else { " · Charging" });
-        } else if d.asleep {
-            line.push_str(" · Asleep");
-        }
-        let via = mask(&line, small_f, light);
-        cv.draw(&via, pad, y, dim, 255);
-        y += px(30.0);
-
-        // Last 24 hours.
-        let title = mask("Last 24 hours", small_f, light);
-        cv.draw(&title, pad, y, dim, 255);
-        y += px(22.0);
-        let (x0, x1, top, bottom) = (pad, w - pad, y, y + chart_h);
+        let chart_h = bottom - top;
         for gy in [top, (top + bottom) / 2, bottom] {
             let mut x = x0;
             while x < x1 {
                 cv.blend(x, gy, grid, 255);
                 x += px(4.0).max(2);
             }
+        }
+        // Warning level.
+        let th = settings::threshold(SETTINGS_KEY, &d.key);
+        let ty = bottom - chart_h * th / 100;
+        let mut x = x0;
+        while x < x1 {
+            cv.line(x, ty, (x + px(4.0)).min(x1), ty, 1, ui::low_color(light));
+            x += px(7.0).max(3);
         }
         let now = batteryhub::history::now_secs();
         let from = now.saturating_sub(batteryhub::history::KEEP_SECS);
@@ -1270,65 +1262,246 @@ impl App {
             (x0 + ((x1 - x0) as f32 * fx) as i32, bottom - (chart_h as f32 * l as f32 / 100.0) as i32)
         };
         let pts = self.history.points(&d.key);
+        // Filled area: each step's column from its level down to the bottom.
+        let mut steps: Vec<(i32, i32, i32)> = pts.windows(2).map(|p| (pos(p[0].0, p[0].1).0, pos(p[1].0, p[1].1).0, pos(p[0].0, p[0].1).1)).collect();
+        if let Some(&(t, l)) = pts.last() {
+            let (lx, ly) = pos(t, l);
+            steps.push((lx, x1, ly));
+        }
+        for &(a, b, y) in &steps {
+            for xx in a..b {
+                for yy in y..bottom {
+                    cv.blend(xx, yy, accent, 40);
+                }
+            }
+        }
         let lw = px(2.0).max(2);
         for pair in pts.windows(2) {
             let (a, b) = (pos(pair[0].0, pair[0].1), pos(pair[1].0, pair[1].1));
-            // Steps, not slopes: a level holds until the next reading.
             cv.line(a.0, a.1, b.0, a.1, lw, accent);
             cv.line(b.0, a.1, b.0, b.1, lw, accent);
         }
         if let Some(&(t, l)) = pts.last() {
             let (lx, ly) = pos(t, l);
             cv.line(lx, ly, x1, ly, lw, accent);
-            // Dotted "now" line and the latest point.
-            let mut yy = top;
-            while yy < bottom {
-                cv.blend(x1, yy, grid, 255);
-                yy += px(4.0).max(2);
-            }
             cv.disc(x1, ly, px(3.5), accent);
         }
-        y = bottom + px(10.0);
-        let ago = mask("24h ago", small_f, light);
-        cv.draw(&ago, x0, y, dim, 255);
-        let nowm = mask("Now", small_f, light);
-        cv.draw(&nowm, x1 - nowm.w, y, dim, 255);
-        // As much room under the bottom labels as above the header.
-        let h = (y + px(14.0) + px(18.0)).min(tall);
-        cv.px.truncate((w * h) as usize);
+    }
 
-        for f in [icon_f, name_f, big_f, small_f] {
+    /// The card: every device in one list (icon, name, connection, bar, level and a ring), with
+    /// a header (settings button) and a footer (last reading, "Ver detalhes"). With details on,
+    /// each device also gets its last 24 hours. Returns the size, the pixels and the two buttons
+    /// (settings, details) as (x0, y0, x1, y1) in card pixels.
+    fn render_list_card(&self) -> (i32, i32, Vec<u32>, [(i32, i32, i32, i32); 2]) {
+        let s = self.scale();
+        let px = |v: f32| (v * s).round() as i32;
+        let light = self.light;
+        let fg = if light { rgb(0, 0, 0) } else { rgb(255, 255, 255) };
+        let dim = if light { rgb(96, 96, 96) } else { rgb(170, 170, 170) };
+        let track = if light { rgb(222, 222, 222) } else { rgb(74, 74, 74) };
+        let line_c = if light { rgb(226, 226, 226) } else { rgb(66, 66, 66) };
+        let tile = if light { rgb(236, 236, 236) } else { rgb(58, 58, 58) };
+        let on_c = if light { rgb(16, 124, 16) } else { rgb(108, 203, 95) };
+        // Only devices that are on: a switched-off one is not listed (as on the strip).
+        let devices = self.visible();
+        let details = self.card_details;
+
+        let icon_l = make_font(px(22.0), 400, "Segoe Fluent Icons", "Segoe MDL2 Assets", 0);
+        let icon_s = make_font(px(16.0), 400, "Segoe Fluent Icons", "Segoe MDL2 Assets", 0);
+        let icon_xs = make_font(px(14.0), 400, "Segoe Fluent Icons", "Segoe MDL2 Assets", 0);
+        let title_f = make_font(px(15.0), 600, "Segoe UI Variable Text", "Segoe UI", 0);
+        let name_f = make_font(px(14.0), 600, "Segoe UI Variable Text", "Segoe UI", 0);
+        let pct_f = make_font(px(20.0), 600, "Segoe UI Variable Display", "Segoe UI", 0);
+        let small_f = make_font(px(12.0), 400, "Segoe UI Variable Text", "Segoe UI", 0);
+
+        let w = px(460.0);
+        let pad = px(16.0);
+        let row_h = px(72.0);
+        let chart_block = px(64.0);
+        let header_h = px(48.0);
+        let footer_h = px(44.0);
+        let rows = devices.len().max(1) as i32;
+        let h = header_h + rows * (row_h + if details { chart_block } else { 0 }) + footer_h;
+        let mut cv = Canvas { w, h, px: vec![0; (w * h) as usize] };
+
+        // Header: battery glyph, title, settings button.
+        let head = mask("\u{E83F}", icon_s, light);
+        cv.draw(&head, pad, px(15.0), fg, 255);
+        let title = mask("Dispositivos conectados", title_f, light);
+        cv.draw(&title, pad + px(28.0), px(13.0), fg, 255);
+        let gear = mask("\u{E713}", icon_s, light);
+        let gx = w - pad - gear.w;
+        cv.draw(&gear, gx, px(15.0), dim, 255);
+        let gear_btn = (gx - px(8.0), px(6.0), w - pad + px(8.0), header_h - px(6.0));
+        cv.fill_rrect(pad, header_h - 1, w - pad, header_h, 0, line_c, 255);
+
+        let mut y = header_h;
+        if devices.is_empty() {
+            let m = mask("Nenhum aparelho encontrado", small_f, light);
+            cv.draw(&m, pad, y + (row_h - m.h) / 2, dim, 255);
+            y += row_h;
+        }
+        let now = batteryhub::history::now_secs();
+        for (i, d) in devices.iter().enumerate() {
+            let accent = self.level_color(d);
+            // Icon tile with the status dot.
+            let (tx, ty, ts) = (pad, y + px(14.0), px(44.0));
+            cv.fill_rrect(tx, ty, tx + ts, ty + ts, px(10.0), tile, 255);
+            let g = mask(&d.kind.glyph().to_string(), icon_l, light);
+            cv.draw(&g, tx + (ts - g.w) / 2, ty + (ts - g.h) / 2, fg, 255);
+            let off = !d.connected;
+            cv.disc(tx + ts - px(7.0), ty + px(7.0), px(3.5), if d.asleep || off { dim } else { on_c });
+
+            // Ring with the battery glyph, at the right.
+            let rr = px(19.0);
+            let (rcx, rcy) = (w - pad - rr, y + row_h / 2);
+            let frac = if d.percent >= 0 && !off { d.percent as f32 / 100.0 } else { 0.0 };
+            cv.ring(rcx, rcy, rr, px(4.0).max(3), frac, accent, track);
+            let bat = if d.percent < 0 || off {
+                '\u{E83F}'
+            } else {
+                let step = (d.percent.clamp(0, 100) / 10) as u32;
+                let base = if d.charging { 0xE85A } else { 0xE850 };
+                if step >= 10 { if d.charging { '\u{E83E}' } else { '\u{E83F}' } } else { char::from_u32(base + step).unwrap_or('\u{E83F}') }
+            };
+            let bm = mask(&bat.to_string(), icon_xs, light);
+            cv.draw(&bm, rcx - bm.w / 2, rcy - bm.h / 2, accent, 255);
+
+            // Level and the short state under it, right-aligned before the ring.
+            let right = rcx - rr - px(12.0);
+            let level = d.level();
+            let pct = mask(if off { "—" } else { &level }, pct_f, light);
+            cv.draw(&pct, right - pct.w, y + px(12.0), fg, 255);
+            let eta = batteryhub::history::estimate(self.history.points(&d.key), now, d.percent, d.charging);
+            let (state, state_c) = if off {
+                ("Desligado".to_string(), dim)
+            } else if d.is_full() {
+                ("Carregado".to_string(), on_c)
+            } else if d.charging {
+                ("Carregando".to_string(), on_c)
+            } else if d.asleep {
+                ("Dormindo".to_string(), dim)
+            } else if let Some(e) = eta {
+                (format!("{} restantes", batteryhub::history::duration_pt(e)), dim)
+            } else {
+                (String::new(), dim)
+            };
+            let sm = mask(&state, small_f, light);
+            let col_left = (right - pct.w).min(right - sm.w);
+            if !state.is_empty() {
+                cv.draw(&sm, right - sm.w, y + px(42.0), state_c, 255);
+            }
+
+            // Name (cut to fit), connection, and the bar.
+            let tx2 = tx + ts + px(14.0);
+            let room = col_left - px(12.0) - tx2;
+            let mut chars: Vec<char> = d.name.chars().collect();
+            let mut name = mask(&d.name, name_f, light);
+            while name.w > room && chars.len() > 4 {
+                chars.pop();
+                name = mask(&format!("{}…", chars.iter().collect::<String>().trim_end()), name_f, light);
+            }
+            cv.draw(&name, tx2, y + px(12.0), fg, 255);
+            let mut via = if off { via_pt(&d.via) } else { format!("{} · {}", via_pt(&d.via), if d.asleep { "Dormindo" } else { "Conectado" }) };
+            if d.charging && !d.is_full() {
+                if let Some(e) = eta {
+                    via = format!("{} · cheio em {}", via_pt(&d.via), batteryhub::history::duration_pt(e));
+                }
+            }
+            let vm = mask(&via, small_f, light);
+            cv.draw(&vm, tx2, y + px(33.0), dim, 255);
+            let (bx0, bx1, by) = (tx2, col_left - px(12.0), y + px(54.0));
+            if bx1 > bx0 + px(20.0) {
+                cv.fill_rrect(bx0, by, bx1, by + px(6.0), px(3.0), track, 255);
+                if d.percent > 0 && !off {
+                    let fill = bx0 + (bx1 - bx0) * d.percent.min(100) / 100;
+                    cv.fill_rrect(bx0, by, fill.max(bx0 + px(6.0)), by + px(6.0), px(3.0), accent, 255);
+                }
+            }
+            y += row_h;
+
+            if details {
+                let (cx0, cx1, top, bottom) = (tx2, w - pad, y, y + px(40.0));
+                self.draw_chart(&mut cv, d, cx0, cx1, top, bottom, accent, s);
+                let ago = mask("há 24h", small_f, light);
+                cv.draw(&ago, cx0, bottom + px(4.0), dim, 255);
+                let nowm = mask("Agora", small_f, light);
+                cv.draw(&nowm, cx1 - nowm.w, bottom + px(4.0), dim, 255);
+                y += chart_block;
+            }
+            if i + 1 < devices.len() {
+                cv.fill_rrect(pad, y - 1, w - pad, y, 0, line_c, 255);
+            }
+        }
+
+        // Footer: last reading and "Ver detalhes".
+        cv.fill_rrect(pad, y, w - pad, y + 1, 0, line_c, 255);
+        let fy = y + (footer_h - px(16.0)) / 2;
+        let clock = mask("\u{E823}", icon_s, light);
+        cv.draw(&clock, pad, fy, dim, 255);
+        let ago = self.last_read_text();
+        let am = mask(&ago, small_f, light);
+        cv.draw(&am, pad + px(24.0), fy + px(1.0), dim, 255);
+        let chev = mask(if details { "\u{E70E}" } else { "\u{E76C}" }, icon_xs, light);
+        let dm = mask(if details { "Ocultar detalhes" } else { "Ver detalhes" }, small_f, light);
+        let cx = w - pad - chev.w;
+        cv.draw(&chev, cx, fy + px(3.0), fg, 255);
+        cv.draw(&dm, cx - px(6.0) - dm.w, fy + px(1.0), fg, 255);
+        let details_btn = (cx - px(6.0) - dm.w - px(8.0), y + px(4.0), w - pad + px(8.0), h - px(4.0));
+
+        for f in [icon_l, icon_s, icon_xs, title_f, name_f, pct_f, small_f] {
             unsafe {
                 let _ = DeleteObject(HGDIOBJ(f.0));
             }
         }
-        (w, h, cv.px)
+        (w, h, cv.px, [gear_btn, details_btn])
     }
 
-    /// Shows the card for device `i` above (or below) its part of `strip`.
-    fn show_card(&mut self, i: usize, strip: HWND, from: i32, to: i32) {
-        let devices = self.visible();
-        let Some(d) = devices.get(i) else { return };
+    /// "Última leitura: agora" / "há 3 min" / "há 2 h", from the newest reading of a shown device.
+    fn last_read_text(&self) -> String {
+        let newest = self.order.iter().filter_map(|k| self.devices.get(k)).filter(|t| t.status.connected).map(|t| t.seen.elapsed().as_secs()).min();
+        match newest {
+            None => "Sem leituras ainda".into(),
+            Some(s) if s < 60 => "Última leitura: agora".into(),
+            Some(s) if s < 3600 => format!("Última leitura: há {} min", s / 60),
+            Some(s) => format!("Última leitura: há {} h", s / 3600),
+        }
+    }
+
+    /// Shows the list card above (or below) `strip`, centred on it. Already open: redraws it in
+    /// place (new values, details on / off).
+    fn show_card(&mut self, strip: HWND) {
         if self.card.0.is_null() {
             self.card = create_card(self.main);
         }
         if self.card.0.is_null() {
             return;
         }
-        let (w, h, px) = self.render_card(d);
+        self.card_strip = strip;
+        let (w, h, px, buttons) = self.render_list_card();
+        self.card_buttons = buttons;
+        let d_key = "list".to_string();
         unsafe {
             let mut rc = RECT::default();
             let _ = GetWindowRect(strip, &mut rc);
+            let (from, to) = (0, rc.right - rc.left);
             let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
             let _ = GetMonitorInfoW(MonitorFromWindow(strip, MONITOR_DEFAULTTONEAREST), &mut mi);
             let gap = (8.0 * self.scale()) as i32;
             let work = mi.rcWork;
-            let x = (rc.left + (from + to) / 2 - w / 2).clamp(work.left + gap, (work.right - w - gap).max(work.left));
-            let y = if rc.top - h - gap >= work.top { rc.top - h - gap } else { rc.bottom + gap };
+            let mut x = (rc.left + (from + to) / 2 - w / 2).clamp(work.left + gap, (work.right - w - gap).max(work.left));
+            let mut y = if rc.top - h - gap >= work.top { rc.top - h - gap } else { rc.bottom + gap };
+            // Already open (new values, details on / off): it stays where it is, growing or
+            // shrinking from its bottom edge, even if an auto-hide taskbar has slid away meanwhile.
+            if self.card_anim.visible && self.card_anim.showing && self.card_anim.key == d_key {
+                let a = &self.card_anim;
+                x = (a.x + a.w / 2 - w / 2).clamp(work.left + gap, (work.right - w - gap).max(work.left));
+                y = (a.y + a.h - h).max(work.top + gap);
+            }
             // Slides 10 px towards its place: up when above the taskbar, down when below it.
             let slide = (10.0 * self.scale()) as i32 * if y < rc.top { 1 } else { -1 };
             let was_shown = self.card_anim.visible && self.card_anim.showing;
-            let same = was_shown && self.card_anim.key == d.key;
+            let same = was_shown && self.card_anim.key == d_key;
             let old = std::mem::take(&mut self.card_anim);
             // Already open on another device: blend the old card into the new one.
             let prev = (was_shown && !same && old.h == h).then(|| (old.x, old.w, old.px.clone()));
@@ -1336,7 +1509,7 @@ impl App {
             let (bg, border) = self.card_colors();
             let radius = (8.0 * self.scale()).round() as i32;
             let scale = self.scale();
-            self.card_anim = CardAnim { at: old.at, showing: true, visible: true, x, y, slide, w, h, px, key: d.key.clone(), prev, bg, border, radius, scale };
+            self.card_anim = CardAnim { at: old.at, showing: true, visible: true, x, y, slide, w, h, px, key: d_key, prev, bg, border, radius, scale };
             if crossing {
                 self.card_anim.at = Some(Instant::now());
                 SetTimer(Some(self.main), TIMER_CARD, 15, None);
@@ -1457,16 +1630,16 @@ impl App {
     fn tip_text(&self, i: usize) -> String {
         let devices = self.visible();
         let Some(d) = devices.get(i) else {
-            return "BatteryHub: no devices found".into();
+            return "BatteryHub: nenhum aparelho encontrado".into();
         };
         let level = d.level();
         let numeric = level.ends_with('%');
         let state = if d.asleep {
-            " (asleep)"
+            " (dormindo)"
         } else if d.is_full() && numeric {
-            " (full)"
+            " (cheio)"
         } else if d.charging && numeric {
-            " (charging)"
+            " (carregando)"
         } else {
             ""
         };
@@ -1499,12 +1672,61 @@ impl App {
                 return;
             }
             self.tip_for = Some(key);
-            // The card (name, level, last 24 hours) above the hovered device; nothing between devices.
-            match hit {
-                Some((i, from, to)) => self.show_card(i, on, from, to),
-                None => self.hide_card(),
+            // One card with every device, opened anywhere on the strip; already open: kept as is.
+            let _ = KillTimer(Some(self.main), TIMER_CARD_WATCH);
+            if !(self.card_anim.visible && self.card_anim.showing && self.card_strip == on) {
+                self.show_card(on);
             }
         }
+    }
+
+    /// The mouse left the strip: the card stays while the mouse is on the card (or on its way
+    /// there, between the two); TIMER_CARD_WATCH checks until it is on neither.
+    fn card_left_strip(&mut self) {
+        if self.card_anim.visible && self.card_anim.showing {
+            unsafe {
+                SetTimer(Some(self.main), TIMER_CARD_WATCH, 120, None);
+            }
+        } else {
+            self.hide_tip();
+        }
+    }
+
+    /// TIMER_CARD_WATCH: closes the card once the mouse is on neither the strip nor the card.
+    fn card_watch(&mut self) -> bool {
+        unsafe {
+            let mut pt = POINT::default();
+            let (mut rs, mut rc) = (RECT::default(), RECT::default());
+            let ok = GetCursorPos(&mut pt).is_ok() && GetWindowRect(self.card_strip, &mut rs).is_ok() && GetWindowRect(self.card, &mut rc).is_ok();
+            // The strip, the card and the gap between them, as one area.
+            let area = RECT { left: rs.left.min(rc.left), top: rs.top.min(rc.top), right: rs.right.max(rc.right), bottom: rs.bottom.max(rc.bottom) };
+            let near = ok && self.card_anim.visible && self.card_anim.showing && PtInRect(&area, pt).as_bool();
+            let on_strip = ok && PtInRect(&rs, pt).as_bool();
+            let on_card = ok && PtInRect(&rc, pt).as_bool();
+            // Over the gap beside the card (not between it and the strip) counts as away.
+            let in_band = pt.x >= rc.left && pt.x < rc.right;
+            if near && (on_strip || on_card || in_band) {
+                return false;
+            }
+            let _ = KillTimer(Some(self.main), TIMER_CARD_WATCH);
+            self.hide_tip();
+            true
+        }
+    }
+
+    /// A click on the card at (x, y), in card pixels: the settings button opens the menu,
+    /// "Ver detalhes" shows / hides the last 24 hours. True when the menu should open.
+    fn card_click(&mut self, x: i32, y: i32) -> bool {
+        let inside = |b: (i32, i32, i32, i32)| x >= b.0 && x < b.2 && y >= b.1 && y < b.3;
+        if inside(self.card_buttons[0]) {
+            return true;
+        }
+        if inside(self.card_buttons[1]) {
+            self.card_details = !self.card_details;
+            let strip = self.card_strip;
+            self.show_card(strip);
+        }
+        false
     }
 
     fn hide_tip(&mut self) {
@@ -2071,8 +2293,8 @@ unsafe fn show_menu() {
             if !devices.is_empty() {
                 let _ = AppendMenuW(menu, MF_SEPARATOR, 0, windows::core::PCWSTR::null());
             }
-            let _ = AppendMenuW(menu, MF_STRING, ID_REFRESH_DEVICES, w!("Refresh devices"));
-            let _ = AppendMenuW(menu, MF_STRING, ID_REFRESH_LEVELS, w!("Refresh battery levels"));
+            let _ = AppendMenuW(menu, MF_STRING, ID_REFRESH_DEVICES, w!("Procurar aparelhos de novo"));
+            let _ = AppendMenuW(menu, MF_STRING, ID_REFRESH_LEVELS, w!("Atualizar bateria agora"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, windows::core::PCWSTR::null());
             // How often the battery levels are read, and whether a device change triggers a read.
             if let Ok(sub) = CreatePopupMenu() {
@@ -2081,14 +2303,14 @@ unsafe fn show_menu() {
                     let check = if *m == current { MF_CHECKED } else { MF_UNCHECKED };
                     let _ = AppendMenuW(sub, MF_STRING | check, ID_INTERVAL_BASE + j, &windows::core::HSTRING::from(*label));
                 }
-                let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, sub.0 as usize, w!("Refresh battery every"));
+                let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, sub.0 as usize, w!("Atualizar bateria a cada"));
             }
             let on_change = if refresh_on_change() { MF_CHECKED } else { MF_UNCHECKED };
             let _ = AppendMenuW(
                 menu,
                 MF_STRING | on_change,
                 ID_ON_CHANGE,
-                w!("Refresh when a device connects or disconnects"),
+                w!("Atualizar quando um aparelho conecta ou desconecta"),
             );
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, windows::core::PCWSTR::null());
             let check = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
@@ -2099,18 +2321,18 @@ unsafe fn show_menu() {
                 menu,
                 MF_STRING | check(icons_mode),
                 ID_ICONS_MODE,
-                w!("Show as notification-area icons (Windows arranges them)"),
+                w!("Mostrar como ícones na área de notificação"),
             );
             let _ = AppendMenuW(
                 menu,
                 MF_STRING | check(background),
                 ID_BACKGROUND,
-                w!("Background behind taskbar text (for translucent taskbars)"),
+                w!("Fundo atrás do texto (para barras transparentes)"),
             );
             if let Ok(sub) = CreatePopupMenu() {
                 let mut checked = ID_POSITION_CUSTOM;
                 for (i, px) in POSITION_OFFSETS.iter().enumerate() {
-                    let label = if *px == 0 { "Next to the notification area".to_string() } else { format!("{px} px to the left") };
+                    let label = if *px == 0 { "Ao lado da área de notificação".to_string() } else { format!("{px} px para a esquerda") };
                     let _ = AppendMenuW(sub, MF_STRING, ID_POSITION_FIRST + i, &windows::core::HSTRING::from(label));
                     if *px == offset {
                         checked = ID_POSITION_FIRST + i;
@@ -2118,19 +2340,19 @@ unsafe fn show_menu() {
                 }
                 if checked == ID_POSITION_CUSTOM {
                     // A value set by hand in the registry (TaskbarOffset).
-                    let label = format!("Custom ({offset} px, TaskbarOffset in the registry)");
+                    let label = format!("Personalizado ({offset} px, TaskbarOffset no registro)");
                     let _ = AppendMenuW(sub, MF_STRING | MF_GRAYED, ID_POSITION_CUSTOM, &windows::core::HSTRING::from(label));
                 }
                 let _ = CheckMenuRadioItem(sub, ID_POSITION_FIRST as u32, ID_POSITION_CUSTOM as u32, checked as u32, MF_BYCOMMAND.0);
-                let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, sub.0 as usize, w!("Position on the taskbar"));
+                let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, sub.0 as usize, w!("Posição na barra de tarefas"));
             }
             if let Ok(sub) = CreatePopupMenu() {
                 let mut checked = ID_HEIGHT_CUSTOM;
                 for (i, px) in HEIGHT_OFFSETS.iter().enumerate() {
                     let label = match *px {
-                        0 => "Centred".to_string(),
-                        p if p < 0 => format!("{} px up", -p),
-                        p => format!("{p} px down"),
+                        0 => "Centralizado".to_string(),
+                        p if p < 0 => format!("{} px para cima", -p),
+                        p => format!("{p} px para baixo"),
                     };
                     let _ = AppendMenuW(sub, MF_STRING, ID_HEIGHT_FIRST + i, &windows::core::HSTRING::from(label));
                     if *px == offset_y {
@@ -2138,19 +2360,19 @@ unsafe fn show_menu() {
                     }
                 }
                 if checked == ID_HEIGHT_CUSTOM {
-                    let label = format!("Custom ({offset_y} px, TaskbarOffsetY in the registry)");
+                    let label = format!("Personalizado ({offset_y} px, TaskbarOffsetY no registro)");
                     let _ = AppendMenuW(sub, MF_STRING | MF_GRAYED, ID_HEIGHT_CUSTOM, &windows::core::HSTRING::from(label));
                 }
                 let _ = CheckMenuRadioItem(sub, ID_HEIGHT_FIRST as u32, ID_HEIGHT_CUSTOM as u32, checked as u32, MF_BYCOMMAND.0);
-                let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, sub.0 as usize, w!("Height on the taskbar"));
+                let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, sub.0 as usize, w!("Altura na barra de tarefas"));
             }
             // With more than one monitor: all of them, the main one only, or one other monitor only.
             let others: Vec<(String, String)> =
                 secondary_taskbars().into_iter().take(ID_MONITOR_GONE - ID_MONITOR_FIRST).map(|b| (monitor_id(b), monitor_label(b))).collect();
             if !others.is_empty() {
                 if let Ok(sub) = CreatePopupMenu() {
-                    let _ = AppendMenuW(sub, MF_STRING, ID_MONITOR_ALL, w!("All monitors"));
-                    let _ = AppendMenuW(sub, MF_STRING, ID_MONITOR_MAIN, w!("Main monitor only"));
+                    let _ = AppendMenuW(sub, MF_STRING, ID_MONITOR_ALL, w!("Todos os monitores"));
+                    let _ = AppendMenuW(sub, MF_STRING, ID_MONITOR_MAIN, w!("Só o monitor principal"));
                     let ids: Vec<String> = others.iter().map(|o| o.0.clone()).collect();
                     let checked = match choice.as_str() {
                         "all" => ID_MONITOR_ALL,
@@ -2158,35 +2380,35 @@ unsafe fn show_menu() {
                         id => find_monitor(&ids, id).map(|i| ID_MONITOR_FIRST + i).unwrap_or(ID_MONITOR_GONE),
                     };
                     for (i, (_, label)) in others.iter().enumerate() {
-                        let _ = AppendMenuW(sub, MF_STRING, ID_MONITOR_FIRST + i, &windows::core::HSTRING::from(format!("{label} only")));
+                        let _ = AppendMenuW(sub, MF_STRING, ID_MONITOR_FIRST + i, &windows::core::HSTRING::from(format!("Só {label}")));
                     }
                     if checked == ID_MONITOR_GONE {
-                        let _ = AppendMenuW(sub, MF_STRING | MF_GRAYED, ID_MONITOR_GONE, w!("Chosen monitor (not connected, shown on main)"));
+                        let _ = AppendMenuW(sub, MF_STRING | MF_GRAYED, ID_MONITOR_GONE, w!("Monitor escolhido (desconectado, mostrando no principal)"));
                     }
                     let _ = CheckMenuRadioItem(sub, ID_MONITOR_ALL as u32, ID_MONITOR_GONE as u32, checked as u32, MF_BYCOMMAND.0);
-                    let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, sub.0 as usize, w!("Show widget on"));
+                    let _ = AppendMenuW(menu, MF_STRING | MF_POPUP, sub.0 as usize, w!("Mostrar em"));
                 }
             }
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, windows::core::PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING | check(ui::autostart_enabled(autostart_name())), ID_AUTOSTART, w!("Automatically start with Windows"));
-            let _ = AppendMenuW(menu, MF_STRING | check(auto_update()), ID_AUTO_UPDATE, w!("Automatically check for updates"));
+            let _ = AppendMenuW(menu, MF_STRING | check(ui::autostart_enabled(autostart_name())), ID_AUTOSTART, w!("Iniciar com o Windows"));
+            let _ = AppendMenuW(menu, MF_STRING | check(auto_update()), ID_AUTO_UPDATE, w!("Procurar atualizações automaticamente"));
             let _ = AppendMenuW(
                 menu,
                 MF_STRING | check(silent_install()) | if auto_update() { MF_ENABLED } else { MF_GRAYED },
                 ID_SILENT_UPDATE,
-                w!("Install updates silently"),
+                w!("Instalar atualizações em silêncio"),
             );
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, windows::core::PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, ID_REQUEST, w!("Request support for a device..."));
+            let _ = AppendMenuW(menu, MF_STRING, ID_REQUEST, w!("Pedir suporte para um aparelho..."));
             let busy = UPDATE_BUSY.load(std::sync::atomic::Ordering::Relaxed);
-            let label = if busy { "Checking for updates..." } else { "Check for updates..." };
+            let label = if busy { "Procurando atualizações..." } else { "Procurar atualizações..." };
             let _ = AppendMenuW(
                 menu,
                 MF_STRING | if busy { MF_GRAYED } else { MF_ENABLED },
                 ID_CHECK_UPDATES,
                 &windows::core::HSTRING::from(label),
             );
-            let _ = AppendMenuW(menu, MF_STRING, ID_EXIT, w!("Exit"));
+            let _ = AppendMenuW(menu, MF_STRING, ID_EXIT, w!("Sair"));
             let mut pt = POINT::default();
             let _ = GetCursorPos(&mut pt);
             // Menu colours follow the taskbar: dark on a dark taskbar, light on a light one.
@@ -2514,12 +2736,28 @@ fn compose_card(w: i32, h: i32, bx: i32, bw: i32, a: &CardAnim, layers: &[(&[u32
 
 const CARD_CLASS: windows::core::PCWSTR = w!("BatteryHub.Taskbar.Card");
 
+/// The drivers' connection names, in Portuguese for the card.
+fn via_pt(via: &str) -> String {
+    let v = via.to_ascii_lowercase();
+    if v.contains("2.4") {
+        "Receptor 2.4 GHz".into()
+    } else if v.contains("cable") || v.contains("usb") {
+        "Cabo USB".into()
+    } else if v.contains("bluetooth") {
+        "Bluetooth".into()
+    } else if v.contains("receiver") || v.contains("dongle") {
+        "Receptor".into()
+    } else {
+        via.into()
+    }
+}
+
 /// The hover card: a layered, click-through, topmost popup owned by the main window.
 fn create_card(owner: HWND) -> HWND {
     unsafe {
         let hinst = GetModuleHandleW(None).unwrap_or_default();
         CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
             CARD_CLASS,
             w!(""),
             WS_POPUP,
@@ -2539,8 +2777,19 @@ fn create_card(owner: HWND) -> HWND {
 extern "system" fn card_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         match msg {
-            WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
+            WM_NCHITTEST => LRESULT(HTCLIENT as isize),
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+            WM_LBUTTONUP => {
+                let (x, y) = ((lp.0 & 0xFFFF) as i16 as i32, ((lp.0 >> 16) & 0xFFFF) as i16 as i32);
+                if with_app(|a| a.card_click(x, y)) == Some(true) {
+                    show_menu();
+                }
+                LRESULT(0)
+            }
+            WM_RBUTTONUP => {
+                show_menu();
+                LRESULT(0)
+            }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
         }
     }
@@ -2600,8 +2849,12 @@ extern "system" fn strip_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> L
                         a.hover(hwnd, c.x);
                     });
                 } else {
-                    with_app(|a| a.hide_tip());
-                    trim_memory();
+                    // The card stays while the mouse moves onto it (see card_watch).
+                    with_app(|a| {
+                        a.tracking = false;
+                        a.tip_for = None;
+                        a.card_left_strip();
+                    });
                 }
                 LRESULT(0)
             }
@@ -2629,6 +2882,12 @@ extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             WM_TIMER if wp.0 == TIMER_CARD => {
                 // Animation frames: no memory trim here (it runs ~60 times a second for 0.15 s).
                 with_app(|a| a.card_step());
+                LRESULT(0)
+            }
+            WM_TIMER if wp.0 == TIMER_CARD_WATCH => {
+                if with_app(|a| a.card_watch()) == Some(true) {
+                    trim_memory();
+                }
                 LRESULT(0)
             }
             WM_TIMER => {
@@ -2679,6 +2938,13 @@ extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             // up: read again once things settle, if the user left that option on.
             // A device was plugged in or removed (HID interface arrival / removal, or any device
             // node change): read again once things settle, if the user left that option on.
+            0x00FF /* WM_INPUT */ => {
+                // The Redragon mouse moved again after being shown off: read the devices now.
+                if batteryhub::activity::on_input(lp) {
+                    SetTimer(Some(hwnd), TIMER_DEVCHANGE, 300, None);
+                }
+                DefWindowProcW(hwnd, msg, wp, lp)
+            }
             WM_DEVICECHANGE_MSG if matches!(wp.0, DBT_DEVNODES_CHANGED | DBT_DEVICEARRIVAL | DBT_DEVICEREMOVECOMPLETE) => {
                 if refresh_on_change() {
                     SetTimer(Some(hwnd), TIMER_DEVCHANGE, 1500, None);
@@ -2839,6 +3105,7 @@ fn main() {
             ..Default::default()
         };
         let _ = RegisterDeviceNotificationW(HANDLE(main.0), &mut filter as *mut _ as *const c_void, DEVICE_NOTIFY_WINDOW_HANDLE);
+        batteryhub::activity::watch(main);
         with_app(|a| {
             a.main = main;
             a.taskbar_created = taskbar_created;

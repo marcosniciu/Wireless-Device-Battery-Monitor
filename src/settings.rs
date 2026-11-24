@@ -47,10 +47,10 @@ pub fn append_device_menus(menu: HMENU, devices: &[DeviceStatus], settings_key: 
             let current = threshold(settings_key, &d.key);
             let _ = AppendMenuW(sub, MF_STRING | MF_GRAYED, 0, &inst_str(&format!("{} - {}", d.name, d.charge_text())));
             let _ = AppendMenuW(sub, MF_SEPARATOR, 0, windows::core::PCWSTR::null());
-            let _ = AppendMenuW(sub, MF_STRING | MF_GRAYED, 0, &inst_str("Red warning at or below:"));
+            let _ = AppendMenuW(sub, MF_STRING | MF_GRAYED, 0, &inst_str("Aviso vermelho em ou abaixo de:"));
             for (j, t) in THRESHOLDS.iter().enumerate() {
                 let check = if *t == current { MF_CHECKED } else { MF_UNCHECKED };
-                let def = if *t == DEFAULT_THRESHOLD { "  (default)" } else { "" };
+                let def = if *t == DEFAULT_THRESHOLD { "  (padrão)" } else { "" };
                 let _ = AppendMenuW(sub, MF_STRING | check, MENU_BASE + i * STRIDE + j, &inst_str(&format!("{t}%{def}")));
             }
             let label = format!("{}  ({})", d.name, d.charge_text());

@@ -112,9 +112,69 @@ impl History {
     }
 }
 
+/// Seconds until the battery is empty (on battery) or full (charging), from the latest run of the
+/// history in one direction: the level must have moved at least 3 points over at least 20
+/// minutes. None when there is not enough history or the estimate is beyond 7 days.
+pub fn estimate(points: &[(u64, u8)], now: u64, percent: i32, charging: bool) -> Option<u64> {
+    if !(0..=100).contains(&percent) || (charging && percent >= 100) || (!charging && percent <= 0) {
+        return None;
+    }
+    // Walk back while the level keeps moving the same way (up when charging, down otherwise).
+    let mut start = *points.last()?;
+    for &(t, l) in points.iter().rev().skip(1) {
+        let same_way = if charging { l <= start.1 } else { l >= start.1 };
+        if !same_way || t > start.0 {
+            break;
+        }
+        start = (t, l);
+    }
+    let moved = (percent - start.1 as i32).unsigned_abs() as u64;
+    let dt = now.saturating_sub(start.0);
+    if moved < 3 || dt < 20 * 60 {
+        return None;
+    }
+    let left = if charging { 100 - percent } else { percent } as u64;
+    let secs = left * dt / moved;
+    (secs <= 7 * 24 * 3600).then_some(secs)
+}
+
+/// "≈ 9 h", "≈ 1 h 10 min", "≈ 40 min", "≈ 2 dias".
+pub fn duration_pt(secs: u64) -> String {
+    let min = (secs + 30) / 60;
+    if min < 60 {
+        format!("≈ {} min", min.max(1))
+    } else if min < 10 * 60 {
+        let m = (min % 60) / 10 * 10;
+        if m == 0 { format!("≈ {} h", min / 60) } else { format!("≈ {} h {m} min", min / 60) }
+    } else if min < 48 * 60 {
+        format!("≈ {} h", (min + 30) / 60)
+    } else {
+        format!("≈ {} dias", (min + 720) / 1440)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn estimates() {
+        // Charged to 80 % at 1 h, then 80 -> 70 % in 3 hours: 70 % left at 10 % / 3 h = 21 h.
+        let pts = [(0, 50), (3600, 80), (7200, 75), (14400, 70)];
+        assert_eq!(estimate(&pts, 14400, 70, false), Some(21 * 3600));
+        // Charging 40 -> 60 in 1 hour: 40 % to go = 2 h.
+        let up = [(0, 40), (1800, 50), (3600, 60)];
+        assert_eq!(estimate(&up, 3600, 60, true), Some(2 * 3600));
+        // Too little history.
+        assert_eq!(estimate(&[(0, 50)], 600, 50, false), None);
+        assert_eq!(estimate(&[(0, 51), (60, 50)], 2000, 50, false), None);
+        assert_eq!(estimate(&up, 3600, 100, true), None);
+        assert_eq!(duration_pt(40 * 60), "≈ 40 min");
+        assert_eq!(duration_pt(70 * 60), "≈ 1 h 10 min");
+        assert_eq!(duration_pt(9 * 3600 + 100), "≈ 9 h");
+        assert_eq!(duration_pt(14 * 3600), "≈ 14 h");
+        assert_eq!(duration_pt(3 * 24 * 3600), "≈ 3 dias");
+    }
 
     #[test]
     fn keeps_changes_and_every_ten_minutes() {

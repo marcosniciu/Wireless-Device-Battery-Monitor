@@ -11,7 +11,8 @@
 //!   cmd 04   reply [5] >= 1 valid, [6] = level 0..10 (x 10 %), [7] = 1 on the USB cable (charging)
 //!
 //! Only these two queries are sent (the ones the official software sends); nothing is written to
-//! the mouse. A mouse that is off or out of range is shown disconnected.
+//! the mouse. A mouse that is off or out of range is shown disconnected; as the receiver keeps
+//! answering for it, so is one that has not moved for 15 minutes (see activity.rs).
 use crate::device::{DeviceKind, DeviceStatus, PollContext};
 use crate::drivers::compx::checksum;
 use crate::hid::{HidColl, HidDev};
@@ -73,7 +74,16 @@ fn read(tx: &HidColl, rx: &HidColl) -> Option<Reading> {
         None => return None,
         Some(true) => {}
     }
-    Some(query(&t, &r, CMD_POWER, parse_power).map_or(Reading::Away, |(p, c)| Reading::Power(p, c)))
+    // Switched off, the receiver still answers both queries: linked, level 0, not on the cable.
+    // A running mouse never reports 0 (at 0 % it has already switched off), so that means off.
+    // Right after it is switched off the receiver even repeats the last level, so a mouse that
+    // has not moved for a while (seen through raw input, in the taskbar app) is shown off too.
+    let still = crate::activity::redragon_idle().is_some_and(|s| s >= crate::activity::REDRAGON_IDLE_SECS);
+    Some(match query(&t, &r, CMD_POWER, parse_power) {
+        Some((_, false)) if still => Reading::Away,
+        Some((0, false)) | None => Reading::Away,
+        Some((p, c)) => Reading::Power(p, c),
+    })
 }
 
 pub fn poll(ctx: &mut PollContext) {
@@ -117,6 +127,13 @@ mod tests {
         assert_eq!(parse_link(&[0x09, 0x02, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x49]), Some(true));
         assert_eq!(parse_power(&[0x09, 0x04, 0, 0, 0, 0x02, 0x04, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x42]), Some((40, false)));
         assert_eq!(parse_power(&[0x09, 0x04, 0, 0, 0, 0x02, 0x03, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0x42]), Some((30, true)));
+    }
+
+    #[test]
+    fn off_mouse_reads_level_zero() {
+        // Recorded with the M719 switched off: the receiver still says linked, level 0.
+        assert_eq!(parse_link(&[0x09, 0x02, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x49]), Some(true));
+        assert_eq!(parse_power(&[0x09, 0x04, 0, 0, 0, 0x02, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x46]), Some((0, false)));
     }
 
     #[test]

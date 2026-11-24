@@ -2,6 +2,7 @@
 //! Shared core used by both editions: device model, Win32 HID layer and the drivers.
 #![cfg(windows)]
 
+pub mod activity;
 pub mod ble;
 pub mod device;
 pub mod drivers;

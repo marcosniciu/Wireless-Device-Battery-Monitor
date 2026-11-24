@@ -144,15 +144,15 @@ impl DeviceStatus {
     /// "32%, charging" / "100%, fully charged" / "32%, on battery" - for menus and tooltips.
     pub fn charge_text(&self) -> String {
         let state = if !self.connected {
-            "disconnected"
+            "desconectado"
         } else if self.is_full() {
-            "fully charged"
+            "carregado"
         } else if self.charging {
-            "charging"
+            "carregando"
         } else if self.asleep {
-            "asleep, last known level"
+            "dormindo, último nível"
         } else {
-            "on battery"
+            "na bateria"
         };
         format!("{}, {state}", self.level())
     }
