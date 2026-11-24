@@ -115,16 +115,18 @@ pub fn stinger_battery(r: &[u8]) -> Option<Reading> {
         return None;
     }
     let code = r[9];
-    if !matches!(code, 0x03 | 0x05 | 0x06) {
+    let mv = u16::from_le_bytes([r[11], r[12]]) as i32;
+    // 09 is undocumented: a Stinger Core on the 03F0:0A93 receiver sends it while on the cable,
+    // with a plausible voltage that stops moving. Treated as charging when the voltage is valid.
+    if !matches!(code, 0x03 | 0x05 | 0x06) && !(code == 0x09 && (3300..=4300).contains(&mv)) {
         return None;
     }
-    let mv = u16::from_le_bytes([r[11], r[12]]) as i32;
     let percent = match code {
         0x06 => 100,
         0x05 => interpolate(mv, &STINGER_CHARGING_MV, &STINGER_PCT),
         _ => interpolate(mv, &STINGER_DISCHARGING_MV, &STINGER_PCT),
     };
-    Some(Reading { on: true, percent: Some(percent), mv, charging: code == 0x05, full: code == 0x06 })
+    Some(Reading { on: true, percent: Some(percent), mv, charging: matches!(code, 0x05 | 0x09), full: code == 0x06 })
 }
 
 fn stinger(c: &HidColl, ps: bool) -> Option<Reading> {
@@ -241,6 +243,12 @@ mod tests {
         r[11..13].copy_from_slice(&4000u16.to_le_bytes());
         assert_eq!(stinger_battery(&r).map(|b| (b.percent, b.charging)), Some((Some(70), true)));
         r[9] = 0x01;
+        assert_eq!(stinger_battery(&r), None);
+        // 09 recorded on a 03F0:0A93 receiver while charging: 3783 mV.
+        r[9] = 0x09;
+        r[11..13].copy_from_slice(&3783u16.to_le_bytes());
+        assert_eq!(stinger_battery(&r).map(|b| (b.percent, b.charging)), Some((Some(49), true)));
+        r[11..13].copy_from_slice(&0u16.to_le_bytes());
         assert_eq!(stinger_battery(&r), None);
     }
 }

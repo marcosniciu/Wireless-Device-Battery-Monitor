@@ -510,10 +510,10 @@ extern "system" fn proc_(h: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
                                     IDC_STATUS,
                                     if ok {
                                         "Couldn't open the browser. The request is copied: paste it into a new issue at \
-                                         github.com/ferloom/Wireless-Device-Battery-Monitor/issues."
+                                         github.com/marcosniciu/Wireless-Device-Battery-Monitor/issues."
                                     } else {
                                         "Couldn't open the browser. Please open a new issue at \
-                                         github.com/ferloom/Wireless-Device-Battery-Monitor/issues."
+                                         github.com/marcosniciu/Wireless-Device-Battery-Monitor/issues."
                                     },
                                 );
                             }

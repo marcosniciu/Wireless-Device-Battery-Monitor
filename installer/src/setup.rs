@@ -330,7 +330,7 @@ fn register_app(ed: &Edition, log: &Log, dir: &Path, exe: &Path, created: &mut V
     for (n, v) in [
         ("DisplayName", ed.name.to_string()),
         ("DisplayVersion", inst::VERSION.to_string()),
-        ("Publisher", "ferloom".to_string()),
+        ("Publisher", "marcosniciu".to_string()),
         ("DisplayIcon", format!("{},0", exe.display())),
         ("InstallLocation", dir.display().to_string()),
         ("UninstallString", format!("{quoted} /uninstall")),

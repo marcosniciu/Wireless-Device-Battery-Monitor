@@ -1,6 +1,6 @@
 <p align="center"><img src="res/batteryhub.png" width="112" alt="BatteryHub icon"></p>
 
-<h1 align="center">BatteryHub v1.5</h1>
+<h1 align="center">BatteryHub v1.5.1</h1>
 
 <p align="center">
 <b>An ultra-lightweight Rust implementation of BatteryHub for Windows.</b><br>
@@ -9,7 +9,7 @@ in about <b>0.2 MB of RAM</b>.
 </p>
 
 <p align="center">
-<a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/ferloom/Wireless-Device-Battery-Monitor?label=download&logo=windows" alt="Latest release"></a>
+<a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/marcosniciu/Wireless-Device-Battery-Monitor?label=download&logo=windows" alt="Latest release"></a>
 <a href="../../actions/workflows/ci.yml"><img src="../../actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 <img src="https://img.shields.io/badge/written%20in-Rust-dea584?logo=rust" alt="Written in Rust">
 <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0">
@@ -19,6 +19,16 @@ in about <b>0.2 MB of RAM</b>.
 <img src="res/screenshot-card.png" width="300" alt="Hover card: Logitech PRO 2 LIGHTSPEED, 80%, level bar, Logitech receiver, chart of the last 24 hours"><br>
 <img src="res/screenshot-taskbar.png" width="390" alt="BatteryHub on the Windows 11 taskbar next to the notification area: headset 88%, mouse 80%">
 </p>
+
+> [!NOTE]
+> **Fork de [marcosniciu](https://github.com/marcosniciu)** do BatteryHub de [@ferloom](https://github.com/ferloom/Wireless-Device-Battery-Monitor) (GPL-3.0). Mantém todos os drivers do original e acrescenta:
+>
+> - **Redragon M719 Invader Pro** no receptor `25A7:FA7E`: nível e carregando (`src/drivers/redragon.rs`, protocolo observado no software oficial da Redragon e testado no aparelho);
+> - **JBL Quantum 910 Wireless** no receptor `0ECB:2088` (`src/drivers/jbl.rs`, testado no aparelho);
+> - **HyperX Cloud Stinger Core** no receptor `03F0:0A93`: aceita o código `09` que o fone envia carregando (antes o fone não aparecia).
+>
+> As atualizações automáticas deste fork vêm só das [releases deste repositório](../../releases).
+> **[Baixar o instalador](../../releases/latest)**.
 
 > [!IMPORTANT]
 > **This is a recode of krisgfx9/Wireless-Device-Battery-Monitor** (the C++ BatteryHub by krisgfx9), not a fork and not the original.
@@ -212,6 +222,8 @@ The strip is a small layered window placed inside the taskbar, left of the notif
 | HyperX Cloud II Core Wireless | Over its 2.4 GHz dongle `03F0:0995` (second id `03F0:0795`) (protocol from [HaloBattery](https://github.com/HeyOkay/HaloBattery) and [HyperHeadset](https://github.com/LennardKittner/HyperHeadset), both MIT) |
 | HyperX Cloud Flight | Over its 2.4 GHz dongle `0951:1723` (and `0951:16C4`); level in 5 % steps, no level while charging; contributed by [estebannoemr](https://github.com/estebannoemr) in #93, tested on hardware (protocol from [hyperx-cloud-flight](https://github.com/kondinskis/hyperx-cloud-flight) and [hyperx-cloud-flight-wireless](https://github.com/srn/hyperx-cloud-flight-wireless), both MIT) |
 | HyperX (older headsets) | Cloud Stinger Core Wireless (`0951:170B`, PlayStation receivers `0951:1713` / `03F0:0A93` / `03F0:0B93`) over their 2.4 GHz dongles (protocols from [HeadsetControl](https://github.com/Sapd/HeadsetControl), GPL-3.0, [HyperHeadset](https://github.com/LennardKittner/HyperHeadset), MIT, and [HyperBatteryMonitor](https://github.com/davidsantanaalves/HyperBatteryMonitor), MIT, as used by the original C++ BatteryHub) |
+| Redragon | M719 Invader Pro on its 2.4 GHz receiver `25A7:FA7E` (feature report 08 on FF02:0002, reply input report 09 on FF01; observed in Redragon's official software, tested on hardware; this fork) |
+| JBL | Quantum 910 Wireless on its 2.4 GHz dongle `0ECB:2088` (feature reports 68 = link, 49 = battery, as mapped by [jbl-quantum-linux](https://github.com/Tymon3310/jbl-quantum-linux); tested on hardware; this fork) |
 | Logitech G533 | Headset over its dongle `046D:0A66`, read with its fixed HID++ battery request (protocol and voltage calibration from [HeadsetControl](https://github.com/Sapd/HeadsetControl), GPL-3.0) |
 | ZOWIE | DW-series mice (FK2-DW, U2-DW, S2-DW, EC-DW ...) on the DW receiver `04A5:800A`, ZOWIE U2 on `04A5:8008`; level estimated from the battery voltage, charging on the dock inferred from its trend (protocol from [zowie-battery-tray](https://github.com/IgnacioBarb/zowie-battery-tray), MIT, as used by the original C++ BatteryHub) |
 | Keychron | Mice (M1, M2, M3, M3 mini, M6, M7) on the Keychron Link receiver `3434:D030` / `3434:D031`; keyboards on it only with the `KC_GET_BATTERY` firmware patch ([ldkv/qmk_firmware#1](https://github.com/ldkv/qmk_firmware/pull/1)), as stock keyboard firmware reports its battery over Bluetooth only (protocol as documented by the original C++ BatteryHub, GPL-3.0) |

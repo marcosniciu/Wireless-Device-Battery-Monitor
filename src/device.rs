@@ -280,6 +280,8 @@ pub fn poll_hardware(ids: &[(u16, u16)]) -> Vec<DeviceStatus> {
     drivers::sonix::poll(&mut ctx);
     drivers::compx::poll(&mut ctx);
     drivers::compx_extra::poll(&mut ctx);
+    drivers::redragon::poll(&mut ctx);
+    drivers::jbl::poll(&mut ctx);
     drivers::aula_mouse::poll(&mut ctx);
     drivers::mchose_modern::poll(&mut ctx);
     drivers::ajazz_aj139::poll(&mut ctx);
@@ -408,6 +410,8 @@ fn poll_with(colls: Vec<HidColl>) -> Vec<DeviceStatus> {
     drivers::sonix::poll(&mut ctx);
     drivers::compx::poll(&mut ctx);
     drivers::compx_extra::poll(&mut ctx);
+    drivers::redragon::poll(&mut ctx);
+    drivers::jbl::poll(&mut ctx);
     drivers::aula_mouse::poll(&mut ctx);
     drivers::mchose_modern::poll(&mut ctx);
     drivers::ajazz_aj139::poll(&mut ctx);
