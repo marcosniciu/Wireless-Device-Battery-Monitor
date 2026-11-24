@@ -1,0 +1,43 @@
+# Closes issues labelled "awaiting-confirmation" 24 hours after the label was added, unless someone
+# other than the maintainer replied since then. A reply removes the label, so the issue stays open.
+name: Close unanswered issues
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close or keep labelled issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          LABEL: awaiting-confirmation
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          now=$(date -u +%s)
+          for n in $(gh issue list --repo "$REPO" --label "$LABEL" --state open --limit 500 --json number -q '.[].number'); do
+            # --paginate runs the filter per page, so take the last line / count lines.
+            labelled=$(gh api "repos/$REPO/issues/$n/events" --paginate \
+              -q ".[] | select(.event == \"labeled\" and .label.name == \"$LABEL\") | .created_at" | tail -n 1)
+            [ -z "$labelled" ] && continue
+            replies=$(gh api "repos/$REPO/issues/$n/comments" --paginate \
+              -q ".[] | select(.created_at > \"$labelled\" and .user.login != \"$OWNER\" and .user.type != \"Bot\") | .id" | wc -l)
+            if [ "${replies:-0}" -gt 0 ]; then
+              gh issue edit "$n" --repo "$REPO" --remove-label "$LABEL"
+              echo "#$n: reply received, kept open"
+              continue
+            fi
+            age=$(( now - $(date -u -d "$labelled" +%s) ))
+            if [ "$age" -ge 86400 ]; then
+              gh issue close "$n" --repo "$REPO" --reason completed \
+                --comment "Closing automatically: no reply within 24 hours. If something still doesn't work, comment here or open a new issue."
+              echo "#$n: closed"
+            fi
+          done

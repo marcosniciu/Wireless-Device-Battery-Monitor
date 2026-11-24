@@ -1,0 +1,65 @@
+[package]
+name = "batteryhub"
+version = "1.0.1"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-or-later"
+description = "BatteryHub in Rust: battery levels of wireless devices on the Windows taskbar"
+default-run = "batteryhub-taskbar"
+
+[lib]
+name = "batteryhub"
+path = "src/lib.rs"
+
+[[bin]]
+name = "batteryhub-taskbar"
+path = "src/bin/taskbar.rs"
+
+[dependencies.windows]
+version = "0.62.2"
+features = [
+  "Win32_Foundation",
+  "Win32_Networking_WinHttp",
+  "Win32_Security_Cryptography",
+  "Win32_Security",
+  "Win32_Devices_HumanInterfaceDevice",
+  "Win32_Devices_DeviceAndDriverInstallation",
+  "Win32_Devices_Properties",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Threading",
+  "Win32_System_Registry",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Com",
+  "Win32_System_Console",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_System_WinRT",
+  "Win32_System_SystemInformation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Accessibility",
+  "Win32_UI_Shell",
+  "Win32_UI_Controls",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Input_XboxController",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Input_Ime",
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Dwm",
+  "Devices_Bluetooth_Advertisement",
+  "Storage_Streams",
+  "Gaming_Input",
+  "Devices_Power",
+  "System_Power",
+  "Foundation_Collections",
+]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[build-dependencies]
+embed-resource = "3.0.12"

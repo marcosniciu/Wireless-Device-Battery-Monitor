@@ -1,0 +1,4 @@
+/target/
+/installer/target/
+# Built setup files: upload them to a GitHub release instead of committing them.
+/release/

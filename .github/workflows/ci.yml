@@ -1,0 +1,39 @@
+# Builds and tests BatteryHub on every push and pull request (Windows, MSVC toolchain).
+# The setup is built with the freshly built program embedded and uploaded as an artifact.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            installer
+
+      - name: Unit tests (drivers, settings, removal rules)
+        run: cargo test --release --lib
+
+      - name: Build the program
+        run: cargo build --release --bins
+
+      - name: Build and test the setup
+        shell: pwsh
+        run: |
+          $env:BH_PAYLOAD_DIR = Join-Path $PWD 'target\release'
+          cargo test --release --manifest-path installer/Cargo.toml
+          cargo build --release --manifest-path installer/Cargo.toml
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: BatteryHub-Taskbar-Setup
+          path: installer/target/release/BatteryHub-Taskbar-Setup.exe

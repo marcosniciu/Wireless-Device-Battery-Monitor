@@ -1,0 +1,30 @@
+[package]
+name = "batteryhub-setup"
+version = "1.0.1"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-or-later"
+description = "Setup (install / update / uninstall) for BatteryHub"
+
+# The program files are embedded at build time: BH_PAYLOAD_DIR must be the folder that holds
+# batteryhub-taskbar.exe (build-release.ps1 sets it).
+[[bin]]
+name = "BatteryHub-Taskbar-Setup"
+path = "src/bin/taskbar_setup.rs"
+
+[dependencies]
+batteryhub = { path = ".." }
+
+[dependencies.windows]
+version = "0.62.2"
+features = ["Win32_UI_WindowsAndMessaging", "Win32_UI_Shell"]
+
+[build-dependencies]
+embed-resource = "3.0.12"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
