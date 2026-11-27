@@ -3033,6 +3033,13 @@ extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
 }
 
 fn main() {
+    // A panic aborts the process (panic = "abort"), which leaves no trace: note why in %TEMP%.
+    std::panic::set_hook(Box::new(|info| {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(std::env::temp_dir().join("batteryhub-crash.log")) {
+            let _ = writeln!(f, "{} v{}: {info}", batteryhub::history::now_secs(), batteryhub::install::VERSION);
+        }
+    }));
     unsafe {
         // `--report`: only the "Request support for a device" window (also while BatteryHub runs).
         if std::env::args().any(|a| a == "--report") {
