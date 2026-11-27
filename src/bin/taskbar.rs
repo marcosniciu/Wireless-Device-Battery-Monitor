@@ -1302,36 +1302,38 @@ impl App {
         let line_c = if light { rgb(226, 226, 226) } else { rgb(66, 66, 66) };
         let tile = if light { rgb(236, 236, 236) } else { rgb(58, 58, 58) };
         let on_c = if light { rgb(16, 124, 16) } else { rgb(108, 203, 95) };
+        let card_bg = self.card_colors().0;
         // Only devices that are on: a switched-off one is not listed (as on the strip).
         let devices = self.visible();
         let details = self.card_details;
 
-        let icon_l = make_font(px(22.0), 400, "Segoe Fluent Icons", "Segoe MDL2 Assets", 0);
-        let icon_s = make_font(px(16.0), 400, "Segoe Fluent Icons", "Segoe MDL2 Assets", 0);
-        let icon_xs = make_font(px(14.0), 400, "Segoe Fluent Icons", "Segoe MDL2 Assets", 0);
-        let title_f = make_font(px(15.0), 600, "Segoe UI Variable Text", "Segoe UI", 0);
-        let name_f = make_font(px(14.0), 600, "Segoe UI Variable Text", "Segoe UI", 0);
-        let pct_f = make_font(px(20.0), 600, "Segoe UI Variable Display", "Segoe UI", 0);
-        let small_f = make_font(px(12.0), 400, "Segoe UI Variable Text", "Segoe UI", 0);
+        let icon_l = make_font(px(28.0), 400, "Segoe Fluent Icons", "Segoe MDL2 Assets", 0);
+        let icon_s = make_font(px(18.0), 400, "Segoe Fluent Icons", "Segoe MDL2 Assets", 0);
+        let icon_xs = make_font(px(22.0), 400, "Segoe Fluent Icons", "Segoe MDL2 Assets", 0);
+        let icon_via = make_font(px(13.0), 400, "Segoe Fluent Icons", "Segoe MDL2 Assets", 0);
+        let title_f = make_font(px(16.0), 400, "Segoe UI Variable Display", "Segoe UI", 0);
+        let name_f = make_font(px(15.0), 600, "Segoe UI Variable Text", "Segoe UI", 0);
+        let pct_f = make_font(px(24.0), 700, "Segoe UI Variable Display", "Segoe UI", 0);
+        let small_f = make_font(px(13.0), 400, "Segoe UI Variable Text", "Segoe UI", 0);
 
-        let w = px(460.0);
-        let pad = px(16.0);
-        let row_h = px(72.0);
+        let w = px(480.0);
+        let pad = px(18.0);
+        let row_h = px(88.0);
         let chart_block = px(64.0);
-        let header_h = px(48.0);
-        let footer_h = px(44.0);
+        let header_h = px(54.0);
+        let footer_h = px(50.0);
         let rows = devices.len().max(1) as i32;
         let h = header_h + rows * (row_h + if details { chart_block } else { 0 }) + footer_h;
         let mut cv = Canvas { w, h, px: vec![0; (w * h) as usize] };
 
         // Header: battery glyph, title, settings button.
         let head = mask("\u{E83F}", icon_s, light);
-        cv.draw(&head, pad, px(15.0), fg, 255);
+        cv.draw(&head, pad, (header_h - head.h) / 2, fg, 255);
         let title = mask("Dispositivos conectados", title_f, light);
-        cv.draw(&title, pad + px(28.0), px(13.0), fg, 255);
+        cv.draw(&title, pad + head.w + px(12.0), (header_h - title.h) / 2, fg, 255);
         let gear = mask("\u{E713}", icon_s, light);
         let gx = w - pad - gear.w;
-        cv.draw(&gear, gx, px(15.0), dim, 255);
+        cv.draw(&gear, gx, (header_h - gear.h) / 2, dim, 255);
         let gear_btn = (gx - px(8.0), px(6.0), w - pad + px(8.0), header_h - px(6.0));
         cv.fill_rrect(pad, header_h - 1, w - pad, header_h, 0, line_c, 255);
 
@@ -1345,18 +1347,21 @@ impl App {
         for (i, d) in devices.iter().enumerate() {
             let accent = self.level_color(d);
             // Icon tile with the status dot.
-            let (tx, ty, ts) = (pad, y + px(14.0), px(44.0));
-            cv.fill_rrect(tx, ty, tx + ts, ty + ts, px(10.0), tile, 255);
-            let g = mask(&d.kind.glyph().to_string(), icon_l, light);
-            cv.draw(&g, tx + (ts - g.w) / 2, ty + (ts - g.h) / 2, fg, 255);
+            let (tx, ty, ts) = (pad, y + px(14.0), px(60.0));
+            cv.fill_rrect(tx, ty, tx + ts, ty + ts, px(12.0), tile, 255);
+            if !draw_device_art(&mut cv, d.kind, tx, ty, ts, tile, light) {
+                let g = mask(&d.kind.glyph().to_string(), icon_l, light);
+                cv.draw(&g, tx + (ts - g.w) / 2, ty + (ts - g.h) / 2, fg, 255);
+            }
             let off = !d.connected;
-            cv.disc(tx + ts - px(7.0), ty + px(7.0), px(3.5), if d.asleep || off { dim } else { on_c });
+            cv.disc(tx + ts - px(9.0), ty + px(9.0), px(4.5), if d.asleep || off { dim } else { on_c });
 
             // Ring with the battery glyph, at the right.
-            let rr = px(19.0);
+            let rr = px(25.0);
             let (rcx, rcy) = (w - pad - rr, y + row_h / 2);
             let frac = if d.percent >= 0 && !off { d.percent as f32 / 100.0 } else { 0.0 };
-            cv.ring(rcx, rcy, rr, px(4.0).max(3), frac, accent, track);
+            // The track takes a light shade of the level colour.
+            cv.ring(rcx, rcy, rr, px(5.0).max(3), frac, accent, if off { track } else { mix(accent, card_bg, 0.2) });
             let bat = if d.percent < 0 || off {
                 '\u{E83F}'
             } else {
@@ -1371,7 +1376,7 @@ impl App {
             let right = rcx - rr - px(12.0);
             let level = d.level();
             let pct = mask(if off { "—" } else { &level }, pct_f, light);
-            cv.draw(&pct, right - pct.w, y + px(12.0), fg, 255);
+            cv.draw(&pct, right - pct.w, y + px(16.0), fg, 255);
             let eta = batteryhub::history::estimate(self.history.points(&d.key), now, d.percent, d.charging);
             let (state, state_c) = if off {
                 ("Desligado".to_string(), dim)
@@ -1389,11 +1394,11 @@ impl App {
             let sm = mask(&state, small_f, light);
             let col_left = (right - pct.w).min(right - sm.w);
             if !state.is_empty() {
-                cv.draw(&sm, right - sm.w, y + px(42.0), state_c, 255);
+                cv.draw(&sm, right - sm.w, y + px(50.0), state_c, 255);
             }
 
             // Name (cut to fit), connection, and the bar.
-            let tx2 = tx + ts + px(14.0);
+            let tx2 = tx + ts + px(16.0);
             let room = col_left - px(12.0) - tx2;
             let mut chars: Vec<char> = d.name.chars().collect();
             let mut name = mask(&d.name, name_f, light);
@@ -1401,21 +1406,25 @@ impl App {
                 chars.pop();
                 name = mask(&format!("{}…", chars.iter().collect::<String>().trim_end()), name_f, light);
             }
-            cv.draw(&name, tx2, y + px(12.0), fg, 255);
+            cv.draw(&name, tx2, y + px(17.0), fg, 255);
             let mut via = if off { via_pt(&d.via) } else { format!("{} · {}", via_pt(&d.via), if d.asleep { "Dormindo" } else { "Conectado" }) };
             if d.charging && !d.is_full() {
                 if let Some(e) = eta {
                     via = format!("{} · cheio em {}", via_pt(&d.via), batteryhub::history::duration_pt(e));
                 }
             }
+            // Connection glyph (signal for a receiver, Bluetooth, plug for a cable) and text.
+            let vg = mask(&via_glyph(&d.via).to_string(), icon_via, light);
             let vm = mask(&via, small_f, light);
-            cv.draw(&vm, tx2, y + px(33.0), dim, 255);
-            let (bx0, bx1, by) = (tx2, col_left - px(12.0), y + px(54.0));
+            let vy = y + px(40.0);
+            cv.draw(&vg, tx2, vy + (vm.h - vg.h) / 2, dim, 255);
+            cv.draw(&vm, tx2 + vg.w + px(6.0), vy, dim, 255);
+            let (bx0, bx1, by) = (tx2, col_left - px(12.0), y + px(66.0));
             if bx1 > bx0 + px(20.0) {
-                cv.fill_rrect(bx0, by, bx1, by + px(6.0), px(3.0), track, 255);
+                cv.fill_rrect(bx0, by, bx1, by + px(8.0), px(4.0), track, 255);
                 if d.percent > 0 && !off {
                     let fill = bx0 + (bx1 - bx0) * d.percent.min(100) / 100;
-                    cv.fill_rrect(bx0, by, fill.max(bx0 + px(6.0)), by + px(6.0), px(3.0), accent, 255);
+                    cv.fill_rrect(bx0, by, fill.max(bx0 + px(8.0)), by + px(8.0), px(4.0), accent, 255);
                 }
             }
             y += row_h;
@@ -1436,20 +1445,24 @@ impl App {
 
         // Footer: last reading and "Ver detalhes".
         cv.fill_rrect(pad, y, w - pad, y + 1, 0, line_c, 255);
-        let fy = y + (footer_h - px(16.0)) / 2;
+        let mid = y + footer_h / 2;
         let clock = mask("\u{E823}", icon_s, light);
-        cv.draw(&clock, pad, fy, dim, 255);
+        cv.draw(&clock, pad, mid - clock.h / 2, dim, 255);
         let ago = self.last_read_text();
         let am = mask(&ago, small_f, light);
-        cv.draw(&am, pad + px(24.0), fy + px(1.0), dim, 255);
-        let chev = mask(if details { "\u{E70E}" } else { "\u{E76C}" }, icon_xs, light);
+        cv.draw(&am, pad + clock.w + px(10.0), mid - am.h / 2, dim, 255);
+        let chev = mask(if details { "\u{E70E}" } else { "\u{E76C}" }, icon_via, light);
         let dm = mask(if details { "Ocultar detalhes" } else { "Ver detalhes" }, small_f, light);
         let cx = w - pad - chev.w;
-        cv.draw(&chev, cx, fy + px(3.0), fg, 255);
-        cv.draw(&dm, cx - px(6.0) - dm.w, fy + px(1.0), fg, 255);
-        let details_btn = (cx - px(6.0) - dm.w - px(8.0), y + px(4.0), w - pad + px(8.0), h - px(4.0));
+        cv.draw(&chev, cx, mid - chev.h / 2, fg, 255);
+        let dx = cx - px(8.0) - dm.w;
+        cv.draw(&dm, dx, mid - dm.h / 2, fg, 255);
+        // Divider between the last update and the button.
+        let sx = dx - px(18.0);
+        cv.fill_rrect(sx, y + px(12.0), sx + 1, y + footer_h - px(12.0), 0, line_c, 255);
+        let details_btn = (sx, y + px(4.0), w - pad + px(8.0), h - px(4.0));
 
-        for f in [icon_l, icon_s, icon_xs, title_f, name_f, pct_f, small_f] {
+        for f in [icon_l, icon_s, icon_xs, icon_via, title_f, name_f, pct_f, small_f] {
             unsafe {
                 let _ = DeleteObject(HGDIOBJ(f.0));
             }
@@ -1462,9 +1475,9 @@ impl App {
         let newest = self.order.iter().filter_map(|k| self.devices.get(k)).filter(|t| t.status.connected).map(|t| t.seen.elapsed().as_secs()).min();
         match newest {
             None => "Sem leituras ainda".into(),
-            Some(s) if s < 60 => "Última leitura: agora".into(),
-            Some(s) if s < 3600 => format!("Última leitura: há {} min", s / 60),
-            Some(s) => format!("Última leitura: há {} h", s / 3600),
+            Some(s) if s < 60 => "Última atualização: agora".into(),
+            Some(s) if s < 3600 => format!("Última atualização: há {} min", s / 60),
+            Some(s) => format!("Última atualização: há {} h", s / 3600),
         }
     }
 
@@ -2737,6 +2750,109 @@ fn compose_card(w: i32, h: i32, bx: i32, bw: i32, a: &CardAnim, layers: &[(&[u32
 const CARD_CLASS: windows::core::PCWSTR = w!("BatteryHub.Taskbar.Card");
 
 /// The drivers' connection names, in Portuguese for the card.
+/// Glyph before the connection text: Bluetooth, a plug for a cable, otherwise a signal (receiver).
+fn via_glyph(via: &str) -> char {
+    let v = via.to_ascii_lowercase();
+    if v.contains("bluetooth") || v.contains("ble") {
+        '\u{E702}'
+    } else if v.contains("usb") || v.contains("cable") || v.contains("wired") {
+        '\u{E83E}'
+    } else {
+        '\u{E701}'
+    }
+}
+
+/// `a` faded towards `b`: t = 1 is `a`, t = 0 is `b`.
+fn mix(a: COLORREF, b: COLORREF, t: f32) -> COLORREF {
+    let ch = |c: COLORREF, sh: u32| ((c.0 >> sh) & 0xFF) as f32;
+    let m = |sh: u32| ((ch(a, sh) * t + ch(b, sh) * (1.0 - t)).round() as u32) << sh;
+    COLORREF(m(0) | m(8) | m(16))
+}
+
+/// Product photos for the tiles: 128 x 128, premultiplied BGRA, background removed (64 KB each).
+const PHOTO_N: usize = 128;
+static HEADSET_PHOTO: &[u8] = include_bytes!("../../res/headset-128.bgra");
+static MOUSE_PHOTO: &[u8] = include_bytes!("../../res/mouse-128.bgra");
+
+/// Draws a PHOTO_N square photo scaled into a `size` square at (x, y), blending over the canvas.
+/// Area-averaged when shrinking, so the edges stay smooth.
+fn draw_photo(cv: &mut Canvas, photo: &[u8], x: i32, y: i32, size: i32) {
+    if size <= 0 || photo.len() < PHOTO_N * PHOTO_N * 4 {
+        return;
+    }
+    let f = PHOTO_N as f32 / size as f32;
+    for dy in 0..size {
+        for dx in 0..size {
+            let (sx0, sy0) = ((dx as f32 * f) as usize, (dy as f32 * f) as usize);
+            let (sx1, sy1) = ((((dx + 1) as f32 * f) as usize).clamp(sx0 + 1, PHOTO_N), (((dy + 1) as f32 * f) as usize).clamp(sy0 + 1, PHOTO_N));
+            let mut acc = [0u32; 4];
+            for sy in sy0..sy1 {
+                for sx in sx0..sx1 {
+                    let o = (sy * PHOTO_N + sx) * 4;
+                    for k in 0..4 {
+                        acc[k] += photo[o + k] as u32;
+                    }
+                }
+            }
+            let n = ((sx1 - sx0) * (sy1 - sy0)) as u32;
+            let (b, g, r, a) = (acc[0] / n, acc[1] / n, acc[2] / n, acc[3] / n);
+            if a == 0 {
+                continue;
+            }
+            let (px, py) = (x + dx, y + dy);
+            if px < 0 || py < 0 || px >= cv.w || py >= cv.h {
+                continue;
+            }
+            let i = (py * cv.w + px) as usize;
+            let d = cv.px[i];
+            let inv = 255 - a;
+            let ch = |sh: u32, s: u32| (s + ((d >> sh) & 0xFF) * inv / 255).min(255);
+            cv.px[i] = ch(0, b) | (ch(8, g) << 8) | (ch(16, r) << 16) | (ch(24, a) << 24);
+        }
+    }
+}
+
+/// A small drawing of the device in its tile (a white mouse, a dark headset), made of shapes so
+/// it costs no image files or memory. False for kinds without a drawing (the glyph is used).
+fn draw_device_art(cv: &mut Canvas, kind: DeviceKind, tx: i32, ty: i32, ts: i32, _tile: COLORREF, _light: bool) -> bool {
+    let u = |v: f32| (v * ts as f32 / 60.0).round() as i32;
+
+    match kind {
+        DeviceKind::Mouse => {
+            draw_photo(cv, MOUSE_PHOTO, tx + u(6.0), ty + u(6.0), ts - u(12.0));
+            true
+        }
+        DeviceKind::Headset => {
+            draw_photo(cv, HEADSET_PHOTO, tx + u(5.0), ty + u(5.0), ts - u(10.0));
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Premultiplied BGRA pixels over the card's own colour, as a 24-bit BMP (diagnostics).
+fn save_bmp(path: &std::path::Path, w: i32, h: i32, px: &[u32]) {
+    let row = ((w * 3 + 3) / 4 * 4) as usize;
+    let size = 54 + row * h as usize;
+    let mut b = Vec::with_capacity(size);
+    b.extend_from_slice(b"BM");
+    for v in [size as u32, 0, 54, 40] { b.extend_from_slice(&v.to_le_bytes()); }
+    b.extend_from_slice(&w.to_le_bytes());
+    b.extend_from_slice(&(-h).to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&24u16.to_le_bytes());
+    for _ in 0..6 { b.extend_from_slice(&0u32.to_le_bytes()); }
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let p = px[y * w as usize + x];
+            let a = 255 - (p >> 24);
+            for sh in [0, 8, 16] { b.push((((p >> sh) & 0xFF) + a).min(255) as u8); }
+        }
+        b.resize(54 + row * (y + 1), 0);
+    }
+    let _ = std::fs::write(path, b);
+}
+
 fn via_pt(via: &str) -> String {
     let v = via.to_ascii_lowercase();
     if v.contains("2.4") {
@@ -2874,6 +2990,18 @@ extern "system" fn main_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             WM_POLL_DONE => {
                 let devices = ui::take_result(lp);
                 with_app(|a| a.on_result(devices));
+                // BH_CARD_SNAPSHOT=<folder> (diagnostics): save the card, closed and with details,
+                // as BMP files after the first read, and quit.
+                if let Some(dir) = std::env::var_os("BH_CARD_SNAPSHOT") {
+                    with_app(|a| {
+                        for (details, name) in [(false, "card.bmp"), (true, "card-details.bmp")] {
+                            a.card_details = details;
+                            let (w, h, px, _) = a.render_list_card();
+                            save_bmp(&std::path::Path::new(&dir).join(name), w, h, &px);
+                        }
+                    });
+                    PostQuitMessage(0);
+                }
                 // Hand pages used only during the read (enumeration, Bluetooth, fonts) back to
                 // Windows until the next read, instead of keeping them resident for a minute or more.
                 trim_memory();
@@ -3112,7 +3240,9 @@ fn main() {
             ..Default::default()
         };
         let _ = RegisterDeviceNotificationW(HANDLE(main.0), &mut filter as *mut _ as *const c_void, DEVICE_NOTIFY_WINDOW_HANDLE);
-        batteryhub::activity::watch(main);
+        if std::env::var_os("BH_CARD_SNAPSHOT").is_none() {
+            batteryhub::activity::watch(main);
+        }
         with_app(|a| {
             a.main = main;
             a.taskbar_created = taskbar_created;
